@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "ookla.speedtest",
+  "name": "Ookla Speedtest",
+  "version": "1.0.0",
+  "author": "Garet",
+  "license": "MIT",
+  "description": "Internet speed test with download and upload dials",
+  "kinds": [
+    "panel"
+  ],
+  "entryPoints": {
+    "panel": "Panel.qml"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.speedtest"
+  }
+}

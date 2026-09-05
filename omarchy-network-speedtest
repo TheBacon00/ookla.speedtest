@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+# omarchy:summary=Measure live internet speed using Ookla Speedtest CLI
+# omarchy:group=network
+# omarchy:args=[down|up]
+
+set -e
+
+direction="${1:-}"
+STATE_DIR="/tmp/omarchy-ookla-speedtest-$UID"
+STREAM_FILE="$STATE_DIR/stream.jsonl"
+PID_FILE="$STATE_DIR/speedtest.pid"
+
+format_mbps() {
+  awk -v value="$1" 'BEGIN {
+    if (value <= 0) print "0.0"
+    else if (value < 10) printf "%.1f\n", value
+    else printf "%.0f\n", value
+  }'
+}
+
+cleanup_state() {
+  if [[ -f "$PID_FILE" ]]; then
+    kill "$(cat "$PID_FILE")" 2>/dev/null || true
+  fi
+  rm -rf "$STATE_DIR"
+}
+
+case "$direction" in
+  down)
+    cleanup_state
+    mkdir -p "$STATE_DIR"
+    touch "$STREAM_FILE"
+
+    # Launch official Ookla speedtest in background streaming jsonl progress
+    speedtest --accept-license --accept-gdpr -f jsonl -p yes --progress-update-interval=150 > "$STREAM_FILE" 2>/dev/null &
+    echo "$!" > "$PID_FILE"
+
+    # Read lines as they are appended
+    exec 3< "$STREAM_FILE"
+    while true; do
+      if IFS= read -r line <&3; then
+        [[ -z "$line" ]] && continue
+        type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
+        if [[ "$type" == "download" ]]; then
+          bw=$(jq -r '.download.bandwidth // 0' <<<"$line" 2>/dev/null || true)
+          mbps=$(awk -v b="$bw" 'BEGIN { printf "%.1f\n", (b * 8 / 1000000) }')
+          format_mbps "$mbps"
+        elif [[ "$type" == "upload" || "$type" == "result" ]]; then
+          break
+        fi
+      else
+        # Check if process died
+        pid=$(cat "$PID_FILE" 2>/dev/null || true)
+        if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+          break
+        fi
+        sleep 0.1
+      fi
+    done
+    exec 3<&-
+    ;;
+
+  up)
+    if [[ ! -f "$PID_FILE" || ! -f "$STREAM_FILE" ]]; then
+      mkdir -p "$STATE_DIR"
+      touch "$STREAM_FILE"
+      speedtest --accept-license --accept-gdpr -f jsonl -p yes --progress-update-interval=150 > "$STREAM_FILE" 2>/dev/null &
+      echo "$!" > "$PID_FILE"
+    fi
+
+    exec 3< "$STREAM_FILE"
+    while true; do
+      if IFS= read -r line <&3; then
+        [[ -z "$line" ]] && continue
+        type=$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)
+        if [[ "$type" == "upload" ]]; then
+          bw=$(jq -r '.upload.bandwidth // 0' <<<"$line" 2>/dev/null || true)
+          mbps=$(awk -v b="$bw" 'BEGIN { printf "%.1f\n", (b * 8 / 1000000) }')
+          format_mbps "$mbps"
+        elif [[ "$type" == "result" ]]; then
+          break
+        fi
+      else
+        pid=$(cat "$PID_FILE" 2>/dev/null || true)
+        if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+          break
+        fi
+        sleep 0.1
+      fi
+    done
+    exec 3<&-
+
+    cleanup_state
+    ;;
+
+  *)
+    exec speedtest --accept-license --accept-gdpr "$@"
+    ;;
+esac
